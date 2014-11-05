@@ -61,7 +61,7 @@ describe Shoryuken::Manager do
       Shoryuken.options[:delay] = 0.1
 
       fetcher = double('Fetcher').as_null_object
-      subject.fetcher = fetcher
+      subject.fetchers = [fetcher]
 
       subject.pause_queue!(queue1)
       expect(subject.instance_variable_get('@queues')).to eq [queue2]

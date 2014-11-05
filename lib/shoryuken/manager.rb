@@ -6,7 +6,7 @@ module Shoryuken
     include Celluloid
     include Util
 
-    attr_accessor :fetcher
+    attr_accessor :fetchers, :queues
 
     trap_exit :processor_died
 
@@ -17,6 +17,7 @@ module Shoryuken
       @done = false
 
       @busy  = []
+      @pending = []
       @ready = @count.times.map { Processor.new_link(current_actor) }
     end
 
@@ -30,7 +31,7 @@ module Shoryuken
       watchdog('Manager#stop died') do
         @done = true
 
-        @fetcher.terminate if @fetcher.alive?
+        @fetchers.each { |fetcher| fetcher.terminate if fetcher.alive? }
 
         logger.info { "Shutting down #{@ready.size} quiet workers" }
 
@@ -84,9 +85,17 @@ module Shoryuken
         logger.info "Assigning #{sqs_msg.id}"
 
         processor = @ready.pop
-        @busy << processor
 
-        processor.async.process(queue, sqs_msg)
+        if processor.nil?
+          logger.info "No ready processors, so saving message and pausing queues"
+          # I was going to write code to execute these pending jobs later, but it seems to be already happening?
+          @pending << [queue, sqs_msg]
+          @fetchers_paused = true
+        else
+          @busy << processor
+
+          processor.async.process(queue, sqs_msg)
+        end
       end
     end
 
@@ -117,19 +126,21 @@ module Shoryuken
       logger.debug { "Ready: #{@ready.size}, Busy: #{@busy.size}, Active Queues: #{unparse_queues(@queues)}" }
 
       if @ready.empty?
-        logger.debug { 'Pausing fetcher, because all processors are busy' }
+        logger.debug { 'Pausing fetchers, because all processors are busy' }
 
         after(1) { dispatch }
 
         return
       end
 
-      if queue = next_queue
-        @fetcher.async.fetch(queue, @ready.size)
-      else
-        logger.debug { 'Pausing fetcher, because all queues are paused' }
+      @fetchers.each do |fetcher|
+        if queue = next_queue
+          fetcher.async.fetch(queue, @ready.size)
+        else
+          logger.debug { 'Pausing fetchers, because all queues are paused' }
 
-        @fetcher_paused = true
+          @fetchers_paused = true
+        end
       end
     end
 
@@ -143,11 +154,10 @@ module Shoryuken
 
         @queues << queue
 
-        if @fetcher_paused
-          logger.debug { 'Restarting fetcher' }
+        if @fetchers_paused
+          logger.debug { 'Restarting fetchers' }
 
-          @fetcher_paused = false
-
+          @fetchers_paused = false
 
           dispatch
         end

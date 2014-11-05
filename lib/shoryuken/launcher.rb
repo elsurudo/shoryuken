@@ -9,17 +9,19 @@ module Shoryuken
 
     def initialize
       @manager = Shoryuken::Manager.new_link
-      @fetcher = Shoryuken::Fetcher.new_link(manager)
+
+      @fetchers = []
+      @manager.queues.count.times { @fetchers << Shoryuken::Fetcher.new_link(manager) }
 
       @done = false
 
-      manager.fetcher = @fetcher
+      manager.fetchers = @fetchers
     end
 
     def stop(options = {})
       watchdog('Launcher#stop') do
         @done = true
-        @fetcher.terminate if @fetcher.alive?
+        @fetchers.each { |fetcher| fetcher.terminate if fetcher.alive? }
 
         manager.async.stop(shutdown: !!options[:shutdown], timeout: Shoryuken.options[:timeout])
         manager.wait(:shutdown)
